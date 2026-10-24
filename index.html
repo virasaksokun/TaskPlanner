@@ -663,18 +663,27 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
   let token = "";
   try { token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || ""; } catch (e) {}
   // ===== Paste your Apps Script web app link (ending in /exec) between the quotes. =====
-  const EXEC_URL = "https://script.google.com/macros/library/d/17xx0Y9UQkVl6ZWIXpDgBV5V-3w2CGNu-4V6-yesLQyGTO0cEpYfKdtZx/6/exec?ping=1";
+  const EXEC_URL = "https://script.google.com/macros/library/d/17xx0Y9UQkVl6ZWIXpDgBV5V-3w2CGNu-4V6-yesLQyGTO0cEpYfKdtZx/7/exec";
 
   // Each call goes to your Apps Script as a simple POST (plain text avoids browser pre-checks).
   const ACTIONS = { login: "login", logout: "logout", listTasks: "list", saveTask: "save", deleteTask: "delete" };
+  // Tidy small paste mistakes: spaces, quotes, a trailing slash, or ?ping=1 left on the end.
+  const API_URL = String(EXEC_URL).trim().replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
+  function urlProblem() {
+    if (!API_URL || API_URL.includes("PASTE-YOUR")) return "The link is still the placeholder text.";
+    if (/\/dev$/.test(API_URL)) return "This is the /dev test link. Use the Web app URL ending in /exec from Deploy → Manage deployments.";
+    if (/googleusercontent\.com/.test(API_URL)) return "This link was copied from the browser's address bar. Copy the Web app URL from Deploy → Manage deployments instead.";
+    if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(API_URL)) return `The link should start with https://script.google.com/ and end with /exec. It currently starts with: ${API_URL.slice(0, 45) || "(empty)"}`;
+    return "";
+  }
   async function rawCall(fn, ...args) {
-    if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(EXEC_URL)) throw new Error("NO_URL");
+    if (urlProblem()) throw new Error("NO_URL");
     const req = { action: ACTIONS[fn] };
     if (fn === "login") req.pin = args[0];
     else { req.token = args[0]; if (fn === "saveTask") req.task = args[1]; if (fn === "deleteTask") req.id = args[1]; }
     let res;
     try {
-      res = await fetch(EXEC_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(req), redirect: "follow" });
+      res = await fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(req), redirect: "follow" });
     } catch (e) { throw new Error("NETWORK"); }
     let out;
     try { out = await res.json(); } catch (e) { throw new Error("BAD_REPLY"); }
@@ -721,7 +730,7 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
         c.includes("WRONG_PIN:") ? `Wrong PIN. ${c.split("WRONG_PIN:")[1].trim()[0]} tries left before a 15-minute lock.` :
         c.includes("LOCKED:") ? `Too many wrong tries. Try again in ${parseInt(c.split("LOCKED:")[1], 10)} minutes.` :
         c.includes("NO_PIN") ? "No PIN is set yet. Run setMyPin in the Apps Script editor first." :
-        c.includes("NO_URL") ? "The planner link isn't set. Paste your /exec link into EXEC_URL in index.html." :
+        c.includes("NO_URL") ? "The planner link isn't set correctly. " + urlProblem() :
         c.includes("BAD_REPLY") ? "Google answered with a page instead of data. In Apps Script, set Who has access to Anyone and deploy a New version. (Code: BAD_REPLY)" :
         c.includes("NETWORK") && !navigator.onLine ? "This device is offline. Connect to the internet and try again." :
         c.includes("NETWORK") ? "Google refused the request. Usually: Who has access isn't Anyone, the latest version isn't deployed, or the /exec link is wrong. (Code: NETWORK)" :
