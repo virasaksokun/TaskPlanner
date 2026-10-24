@@ -141,6 +141,25 @@ h1 { font-family: var(--f-display); font-weight: 700; font-size: clamp(26px, 3.4
 .pill:hover { box-shadow: inset 0 0 0 1px var(--accent); }
 .empty { padding: 28px 16px; text-align: center; color: var(--ink-soft); background: var(--sheet); border: 1px dashed var(--rule); border-radius: 10px; }
 
+/* Week */
+.week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+.day { background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; display: grid; grid-template-rows: auto 1fr auto; min-height: 260px; min-width: 0; }
+.day.is-today { border-color: var(--today); box-shadow: inset 0 3px 0 var(--today); }
+.day.drop-hover { background: var(--accent-wash); }
+.day-head { padding: 10px 12px 8px; display: flex; align-items: baseline; justify-content: space-between; gap: 6px; border-bottom: 1px solid var(--rule); }
+.day-name { font-family: var(--f-display); font-weight: 700; font-size: 15px; }
+.day-date { font-family: var(--f-mono); font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.is-today .day-date { background: var(--today); color: #1d2a2a; padding: 1px 6px; border-radius: 4px; }
+.day-list { list-style: none; margin: 0; padding: 6px; display: grid; gap: 4px; align-content: start; min-width: 0; }
+.day-list .chip { white-space: normal; padding: 5px 8px; font-size: 13.5px; }
+.day-free { color: var(--ink-soft); font-size: 13px; padding: 4px 2px; }
+.day-add { border-top: 1px dashed var(--rule); padding: 6px; }
+.day-add input { width: 100%; border: 0; background: transparent; padding: 6px; border-radius: 6px; font-size: 14px; }
+.day-add input:focus { background: var(--accent-wash); outline: none; }
+.import-note { font-size: 13px; color: var(--ink-soft); margin: 0; }
+@media (max-width: 1180px) { .week { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .week { grid-template-columns: minmax(0, 1fr); } .day { min-height: 0; } }
+
 /* Month */
 .month-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .month-bar h2 { margin: 0; font-family: var(--f-display); font-size: 22px; }
@@ -244,6 +263,7 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
       <span class="status" id="status" data-s="idle">Loading…</span>
       <div class="seg" role="group" aria-label="View">
         <button id="vTasks" aria-pressed="true">Tasks</button>
+        <button id="vWeek" aria-pressed="false">Week</button>
         <button id="vMonth" aria-pressed="false">Month</button>
       </div>
       <button class="btn primary" id="newBtn">+ New task</button>
@@ -277,10 +297,26 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
           <option value="start">Start date</option>
           <option value="title">Name</option>
         </select>
+        <button class="btn" id="exportBtn" type="button" title="Download all tasks as a spreadsheet file (CSV)">Export</button>
+        <button class="btn" id="importBtn" type="button" title="Add tasks from a CSV file">Import</button>
+        <input type="file" id="importFile" accept=".csv,text/csv" hidden>
       </div>
     </div>
 
     <div class="groups" id="groups"></div>
+  </section>
+
+  <section id="weekView" class="wrap" style="max-width:none;gap:12px" hidden>
+    <div class="month-bar">
+      <h2 id="weekTitle">Week</h2>
+      <div class="legend"><span>Type in a day's box and press Enter to add a task for that day. Drag tasks between days.</span></div>
+      <div class="nav">
+        <button class="btn icon" id="prevW" aria-label="Previous week">←</button>
+        <button class="btn" id="thisWeek">This week</button>
+        <button class="btn icon" id="nextW" aria-label="Next week">→</button>
+      </div>
+    </div>
+    <div class="week" id="week" aria-label="Days of the week"></div>
   </section>
 
   <section id="monthView" class="wrap" style="max-width:none;gap:12px" hidden>
@@ -351,9 +387,9 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
 
   // ---- state ----
   let savedView = "tasks";
-  try { savedView = localStorage.getItem("planner-view") === "month" ? "month" : "tasks"; } catch (e) {}
+  try { const v = localStorage.getItem("planner-view"); if (v === "month" || v === "week") savedView = v; } catch (e) {}
   const now0 = new Date();
-  const state = { tasks: new Map(), view: savedView, filter: "open", search: "", sort: "due", month: new Date(now0.getFullYear(), now0.getMonth(), 1), expanded: new Set(), ready: false };
+  const state = { tasks: new Map(), view: savedView, filter: "open", search: "", sort: "due", month: new Date(now0.getFullYear(), now0.getMonth(), 1), weekStart: mondayOf(now0), expanded: new Set(), ready: false };
   let backend = null;
 
   const $ = id => document.getElementById(id);
@@ -553,29 +589,101 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
       cell.addEventListener("drop", e => {
         e.preventDefault(); cell.classList.remove("drop-hover");
         const t = state.tasks.get(e.dataTransfer.getData("text/plain"));
-        if (!t) return;
-        // Move the task so it starts on this day, keeping its length.
-        const len = t.start && t.due ? diff(t.start, t.due) : 0;
-        const start = t.start ? ds : "";
-        const due = t.due ? iso(addDays(parseIso(ds), t.start ? len : 0)) : "";
-        saveTask({ ...t, start, due }); toast(`Moved to ${fmt(ds)}`);
+        if (t) moveTo(t, ds);
       });
       grid.append(cell);
     }
     $("month").replaceChildren(grid);
   }
 
+  // ---- render: week ----
+  const PRANK = { high: 0, medium: 1, low: 2 };
+  const activeOn = (t, ds) => { const s0 = t.start || t.due, e0 = t.due || t.start; return !!s0 && s0 <= ds && ds <= (e0 < s0 ? s0 : e0); };
+  const daySort = (a, b) => (a.status === "done") - (b.status === "done") || PRANK[a.priority] - PRANK[b.priority] || (a.due || "").localeCompare(b.due || "");
+  function moveTo(t, ds) {
+    const len = t.start && t.due ? diff(t.start, t.due) : 0;
+    const start = t.start || !t.due ? ds : "";
+    const due = t.due ? iso(addDays(parseIso(ds), t.start ? len : 0)) : "";
+    saveTask({ ...t, start, due }); toast(`Moved to ${fmt(ds)}`);
+  }
+  function wireDayDrop(el, ds) {
+    el.addEventListener("dragover", e => { e.preventDefault(); el.classList.add("drop-hover"); });
+    el.addEventListener("dragleave", e => { if (!el.contains(e.relatedTarget)) el.classList.remove("drop-hover"); });
+    el.addEventListener("drop", e => {
+      e.preventDefault(); el.classList.remove("drop-hover");
+      const t = state.tasks.get(e.dataTransfer.getData("text/plain"));
+      if (t) moveTo(t, ds);
+    });
+  }
+  function renderWeek(all, today) {
+    const ws = state.weekStart, we = addDays(ws, 6);
+    $("weekTitle").textContent = ws.getMonth() === we.getMonth()
+      ? `${ws.getDate()}–${we.getDate()} ${MONTHS[ws.getMonth()]} ${we.getFullYear()}`
+      : `${ws.getDate()} ${MONTHS[ws.getMonth()]} – ${we.getDate()} ${MONTHS[we.getMonth()]} ${we.getFullYear()}`;
+    const wrap = $("week");
+    const focusedDay = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.day : null;
+    const drafts = {};
+    wrap.querySelectorAll("input[data-day]").forEach(i => { if (i.value) drafts[i.dataset.day] = i.value; });
+    wrap.replaceChildren();
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(ws, i), ds = iso(d);
+      const items = all.filter(t => activeOn(t, ds)).sort(daySort);
+      const col = document.createElement("section");
+      col.className = "day" + (ds === today ? " is-today" : "");
+      const head = document.createElement("div"); head.className = "day-head";
+      const nm = document.createElement("span"); nm.className = "day-name"; nm.textContent = DAYS[i];
+      const dt = document.createElement("span"); dt.className = "day-date"; dt.textContent = `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+      head.append(nm, dt);
+      const list = document.createElement("ul"); list.className = "day-list";
+      if (!items.length) { const e = document.createElement("li"); e.className = "day-free"; e.textContent = state.ready ? "Free" : ""; list.append(e); }
+      items.forEach(t => {
+        const li = document.createElement("li"); li.draggable = true;
+        const b = document.createElement("button"); b.type = "button";
+        const isStart = t.start === ds, isDue = t.due === ds;
+        b.className = `chip p-${t.priority}` + (t.status === "done" ? " done" : "") + (!isStart && !isDue ? " mid" : "") + (isDue ? " isdue" : "");
+        const tag = isStart && isDue ? "▸◂" : isStart ? "▸ Start" : isDue ? "◂ Due" : "";
+        if (tag) { const s0 = document.createElement("span"); s0.className = "tag"; s0.textContent = tag; b.append(s0); }
+        b.append(document.createTextNode(t.title));
+        b.title = `${t.title} · ${t.start ? fmt(t.start) : "?"} → ${t.due ? fmt(t.due) : "?"} · ${STATUS_LABEL[t.status]}`;
+        b.addEventListener("click", () => openEditor(t));
+        li.addEventListener("dragstart", e => { e.dataTransfer.setData("text/plain", t.id); e.dataTransfer.effectAllowed = "move"; });
+        li.append(b); list.append(li);
+      });
+      const add = document.createElement("div"); add.className = "day-add";
+      const inp = document.createElement("input");
+      inp.id = "wadd-" + i; inp.dataset.day = ds;
+      inp.placeholder = "Add task…  (start with ! for high)";
+      inp.setAttribute("aria-label", `Add a task on ${DAYS[i]}`);
+      if (drafts[ds]) inp.value = drafts[ds];
+      inp.addEventListener("keydown", e => {
+        if (e.key !== "Enter") return;
+        let title = inp.value.trim(), priority = "medium";
+        if (title.startsWith("!")) { priority = "high"; title = title.slice(1).trim(); }
+        if (!title) return;
+        inp.value = "";
+        createTask({ title, priority, start: ds, due: ds, status: ds <= todayIso() ? "in-progress" : "not-started", notes: "" });
+      });
+      add.append(inp);
+      col.append(head, list, add);
+      wireDayDrop(col, ds);
+      wrap.append(col);
+      if (focusedDay === ds) inp.focus();
+    }
+  }
+
   function render() {
     const today = todayIso();
     const t = new Date();
     $("todayLabel").textContent = `${DAYS[(t.getDay() + 6) % 7]} ${t.getDate()} ${MONTHS[t.getMonth()]} ${t.getFullYear()}`;
-    const isTasks = state.view === "tasks";
-    $("tasksView").hidden = !isTasks; $("monthView").hidden = isTasks;
-    $("vTasks").setAttribute("aria-pressed", String(isTasks));
-    $("vMonth").setAttribute("aria-pressed", String(!isTasks));
+    ["tasks", "week", "month"].forEach(v => {
+      $(v + "View").hidden = state.view !== v;
+      $("v" + v[0].toUpperCase() + v.slice(1)).setAttribute("aria-pressed", String(state.view === v));
+    });
     const all = [...state.tasks.values()];
     renderSummary(all, today);
-    if (isTasks) renderTasks(all, today); else renderMonth(all, today);
+    if (state.view === "tasks") renderTasks(all, today);
+    else if (state.view === "week") renderWeek(all, today);
+    else renderMonth(all, today);
   }
 
   // ---- validation ----
@@ -637,6 +745,70 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
   const setView = v => { state.view = v; try { localStorage.setItem("planner-view", v); } catch (e) {} render(); };
   $("vTasks").addEventListener("click", () => setView("tasks"));
   $("vMonth").addEventListener("click", () => setView("month"));
+  $("vWeek").addEventListener("click", () => setView("week"));
+  const shiftWeek = n => { state.weekStart = addDays(state.weekStart, 7 * n); render(); };
+  $("prevW").addEventListener("click", () => shiftWeek(-1));
+  $("nextW").addEventListener("click", () => shiftWeek(1));
+  $("thisWeek").addEventListener("click", () => { state.weekStart = mondayOf(new Date()); render(); });
+
+  // ---- export / import (CSV, opens in Excel or Google Sheets) ----
+  const CSV_HEAD = ["Task", "Priority", "Status", "Expected start", "Expected completion", "Notes"];
+  const csvCell = v => /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  $("exportBtn").addEventListener("click", () => {
+    const rows = [...state.tasks.values()].sort(sorter("due")).map(t =>
+      [t.title, t.priority[0].toUpperCase() + t.priority.slice(1), STATUS_LABEL[t.status], t.start, t.due, t.notes]);
+    const csv = "\ufeff" + [CSV_HEAD, ...rows].map(r => r.map(x => csvCell(String(x || ""))).join(",")).join("\r\n");
+    try {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      a.download = `tasks-${todayIso()}.csv`;
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast(`Exported ${plural(rows.length, "task")}`);
+    } catch (e) { toast("Export didn't start. Your tasks are also in your Google Sheet."); }
+  });
+  function parseCsv(text) {
+    const rows = []; let row = [], cell = "", q = false;
+    text = text.replace(/^\ufeff/, "");
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) { if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += c; }
+      else if (c === '"') q = true;
+      else if (c === ",") { row.push(cell); cell = ""; }
+      else if (c === "\n" || c === "\r") { if (c === "\r" && text[i + 1] === "\n") i++; row.push(cell); rows.push(row); row = []; cell = ""; }
+      else cell += c;
+    }
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    return rows.filter(r => r.some(x => x.trim()));
+  }
+  function toIsoDate(v) {
+    v = String(v || "").trim(); if (!v) return "";
+    let m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (m) return `${m[1]}-${pad(+m[2])}-${pad(+m[3])}`;
+    m = v.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/); if (m) return `${m[3]}-${pad(+m[2])}-${pad(+m[1])}`; // day/month/year
+    return "";
+  }
+  $("importBtn").addEventListener("click", () => $("importFile").click());
+  $("importFile").addEventListener("change", async e => {
+    const file = e.target.files && e.target.files[0]; e.target.value = "";
+    if (!file) return;
+    const text = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result || "")); r.onerror = rej; r.readAsText(file); }).catch(() => "");
+    const rows = parseCsv(text);
+    if (rows.length < 2) { toast("That file has no tasks in it."); return; }
+    const head = rows[0].map(h => h.trim().toLowerCase());
+    const col = (...names) => head.findIndex(h => names.some(n => h === n || h.includes(n)));
+    const ci = { title: col("task", "title", "name"), prio: col("priority"), status: col("status"), start: col("start"), due: col("completion", "due", "end", "finish"), notes: col("notes", "note") };
+    if (ci.title < 0) { toast('The file needs a "Task" column.'); return; }
+    const now = Date.now();
+    const items = rows.slice(1).map((r, i) => {
+      const t = normalize("", { title: (r[ci.title] || "").trim(), priority: r[ci.prio], status: r[ci.status], start: toIsoDate(r[ci.start]), due: toIsoDate(r[ci.due]), notes: ci.notes >= 0 ? r[ci.notes] : "" });
+      return { id: newId() + i, ...body({ ...t, createdAt: now + i }) };
+    }).filter(t => t.title && t.title !== "Untitled task");
+    if (!items.length) { toast("No tasks found in that file."); return; }
+    items.forEach(t => state.tasks.set(t.id, normalize(t.id, t)));
+    render();
+    for (let i = 0; i < items.length; i += 200) backend && backend.saveMany(items.slice(i, i + 200));
+    toast(`Imported ${plural(items.length, "task")}`);
+  });
   const shiftMonth = n => { state.month = new Date(state.month.getFullYear(), state.month.getMonth() + n, 1); render(); };
   $("prev").addEventListener("click", () => shiftMonth(-1));
   $("next").addEventListener("click", () => shiftMonth(1));
@@ -662,11 +834,15 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
   const TOKEN_KEY = "planner-token";
   let token = "";
   try { token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || ""; } catch (e) {}
-  // ===== Paste your Apps Script web app link (ending in /exec) between the quotes. =====
-  const EXEC_URL = https://script.google.com/macros/s/AKfycbwdR_wwGkD_wSLa1dUEslY2dfSEun4tu6LztUWxYrf4dEyo3DuawJ6uQDoIJHrjuTii/exec";
+  // =====================================================================================
+  //  FOR THE GITHUB PAGE: paste your Apps Script web app link (ending in /exec) below.
+  //  (Inside Google Apps Script you can leave this as it is.)
+  // =====================================================================================
+  const EXEC_URL = "https://script.google.com/macros/s/AKfycbyql35tYDlTpclgIsF8MAPyMqdyy42SB4SGz3cWt0xvGFjfowUcv1y5aLqovO0DHbCNKQ/exec";
+  const IN_GOOGLE = !!(window.google && google.script && google.script.run);
 
   // Each call goes to your Apps Script as a simple POST (plain text avoids browser pre-checks).
-  const ACTIONS = { login: "login", logout: "logout", listTasks: "list", saveTask: "save", deleteTask: "delete" };
+  const ACTIONS = { login: "login", logout: "logout", listTasks: "list", saveTask: "save", saveMany: "saveMany", deleteTask: "delete" };
   // Tidy small paste mistakes: spaces, quotes, a trailing slash, or ?ping=1 left on the end.
   const API_URL = String(EXEC_URL).trim().replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g, "").replace(/[?#].*$/, "").replace(/\/+$/, "");
   function urlProblem() {
@@ -677,10 +853,14 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
     return "";
   }
   async function rawCall(fn, ...args) {
-    if (urlProblem()) throw new Error("NO_URL");
     const req = { action: ACTIONS[fn] };
     if (fn === "login") req.pin = args[0];
-    else { req.token = args[0]; if (fn === "saveTask") req.task = args[1]; if (fn === "deleteTask") req.id = args[1]; }
+    else { req.token = args[0]; if (fn === "saveTask") req.task = args[1]; if (fn === "deleteTask") req.id = args[1]; if (fn === "saveMany") req.tasks = args[1]; }
+    if (IN_GOOGLE) {
+      return new Promise((resolve, reject) =>
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(err => reject(new Error(errCode(err)))).api(req));
+    }
+    if (urlProblem()) throw new Error("NO_URL");
     let res;
     try {
       res = await fetch(API_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(req), redirect: "follow" });
@@ -699,6 +879,7 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
     label: "Saved to Google Sheet",
     saveTask: (id, b) => queue(id, () => call("saveTask", { id, ...b })),
     removeTask: id => queue(id, () => call("deleteTask", id)),
+    saveMany: list => queue("import", () => call("saveMany", list)),
   };
 
   const lockEl = $("lock"), lockErr = $("lockErr");
@@ -729,11 +910,11 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
       lockErr.textContent =
         c.includes("WRONG_PIN:") ? `Wrong PIN. ${c.split("WRONG_PIN:")[1].trim()[0]} tries left before a 15-minute lock.` :
         c.includes("LOCKED:") ? `Too many wrong tries. Try again in ${parseInt(c.split("LOCKED:")[1], 10)} minutes.` :
-        c.includes("NO_PIN") ? "No PIN is set yet. Run setMyPin in the Apps Script editor first." :
+        c.includes("NO_PIN") ? "No PIN is set yet. In your Google Sheet, use the menu Task Planner → Set or change PIN…" :
         c.includes("NO_URL") ? "The planner link isn't set correctly. " + urlProblem() :
         c.includes("BAD_REPLY") ? "Google answered with a page instead of data. In Apps Script, set Who has access to Anyone and deploy a New version. (Code: BAD_REPLY)" :
         c.includes("NETWORK") && !navigator.onLine ? "This device is offline. Connect to the internet and try again." :
-        c.includes("NETWORK") ? "Google refused the request. Usually: Who has access isn't Anyone, the latest version isn't deployed, or the /exec link is wrong. (Code: NETWORK)" :
+        c.includes("NETWORK") ? "Google asked for a sign-in instead of answering. In Apps Script: Deploy → Manage deployments → Edit → Who has access: Anyone → New version → Deploy. (Code: NETWORK)" :
         `Something went wrong: ${c.replace(/^Exception:\s*/, "").slice(0, 160)}`;
       lockErr.hidden = false; $("pin").value = ""; $("pin").focus();
     } finally { btn.disabled = false; btn.textContent = "Unlock"; }
