@@ -663,7 +663,7 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
   let token = "";
   try { token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || ""; } catch (e) {}
   // ===== Paste your Apps Script web app link (ending in /exec) between the quotes. =====
-  const EXEC_URL = "https://script.google.com/macros/library/d/17xx0Y9UQkVl6ZWIXpDgBV5V-3w2CGNu-4V6-yesLQyGTO0cEpYfKdtZx/5/exec";
+  const EXEC_URL = "https://script.google.com/macros/library/d/17xx0Y9UQkVl6ZWIXpDgBV5V-3w2CGNu-4V6-yesLQyGTO0cEpYfKdtZx/6/exec";
 
   // Each call goes to your Apps Script as a simple POST (plain text avoids browser pre-checks).
   const ACTIONS = { login: "login", logout: "logout", listTasks: "list", saveTask: "save", deleteTask: "delete" };
@@ -722,8 +722,10 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
         c.includes("LOCKED:") ? `Too many wrong tries. Try again in ${parseInt(c.split("LOCKED:")[1], 10)} minutes.` :
         c.includes("NO_PIN") ? "No PIN is set yet. Run setMyPin in the Apps Script editor first." :
         c.includes("NO_URL") ? "The planner link isn't set. Paste your /exec link into EXEC_URL in index.html." :
-        c.includes("BAD_REPLY") ? "Google didn't answer as expected. Check the deployment is set to Anyone and redeployed." :
-        "Couldn't reach Google. Check your connection and try again.";
+        c.includes("BAD_REPLY") ? "Google answered with a page instead of data. In Apps Script, set Who has access to Anyone and deploy a New version. (Code: BAD_REPLY)" :
+        c.includes("NETWORK") && !navigator.onLine ? "This device is offline. Connect to the internet and try again." :
+        c.includes("NETWORK") ? "Google refused the request. Usually: Who has access isn't Anyone, the latest version isn't deployed, or the /exec link is wrong. (Code: NETWORK)" :
+        `Something went wrong: ${c.replace(/^Exception:\s*/, "").slice(0, 160)}`;
       lockErr.hidden = false; $("pin").value = ""; $("pin").focus();
     } finally { btn.disabled = false; btn.textContent = "Unlock"; }
   });
