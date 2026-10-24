@@ -663,7 +663,7 @@ dialog::backdrop { background: rgba(10, 20, 20, .45); }
   let token = "";
   try { token = localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || ""; } catch (e) {}
   // ===== Paste your Apps Script web app link (ending in /exec) between the quotes. =====
-  const EXEC_URL = "https://script.google.com/macros/s/AKfycbyUv21FR_FMXxFAPSK0ExboLwcnDkLxX_lKh0rCGS0xeSKIRpprPRfSLRwVd9H9DGkf/exec";
+  const EXEC_URL = "https://script.google.com/macros/s/AKfycbyUv21FR_FMXxFAPSK0ExboLwcnDkLxX_lKh0rCGS0xeSKIRpprPRfSLRwVd9H9DGkf/exec?ping";
 
   // Each call goes to your Apps Script as a simple POST (plain text avoids browser pre-checks).
   const ACTIONS = { login: "login", logout: "logout", listTasks: "list", saveTask: "save", deleteTask: "delete" };
